@@ -1,0 +1,464 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EC2 Cloud Miner
+Mappings:
+  AWSRegion2AMI:
+    # ubuntu/images/hvm-ssd/ubuntu-xenial-16.04-amd64-server-20170113
+    # North Virginia
+    us-east-1:
+      Ubuntu16x04: ami-d15a75c7
+    # Ohio
+    us-east-2:
+      Ubuntu16x04: ami-8b92b4ee
+    # North California
+    us-west-1:
+      Ubuntu16x04: ami-73f7da13
+    # Oregon
+    us-west-2:
+      Ubuntu16x04: ami-835b4efa
+    # Canada
+    ca-central-1:
+      Ubuntu16x04: ami-7ed56a1a
+    # Ireland
+    eu-west-1:
+      Ubuntu16x04: ami-6d48500b
+    # London
+    eu-west-2:
+      Ubuntu16x04: ami-cc7066a8
+    # Frankfurt
+    eu-central-1:
+      Ubuntu16x04: ami-1c45e273
+    # Sydney
+    ap-southeast-2:
+      Ubuntu16x04: ami-e94e5e8a
+    # Tokyo
+    ap-northeast-1:
+      Ubuntu16x04: ami-785c491f
+
+Parameters:
+  Email:
+    Description: Email address thats the user name of your minergate account
+    Type: String
+    AllowedPattern: (^$|([a-zA-Z0-9_\-\.+]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(\]?))
+    ConstraintDescription: Must be a valid email address.
+    Default: 'user@email.com'
+  Coin:
+    AllowedValues:
+      - bcn
+      - fcn
+      - qcn
+      - dsh
+      - xmr
+      - fcn+xmr
+      - fcn+dsh
+      - fcn+qcn
+    Default: xmr
+    Description: Type of Coin to mine
+    Type: String
+  GPUMining:
+    Description: Enable/Disable GPU Mining
+    AllowedValues:
+      - Enable
+      - Disable
+    Default: Disable
+    Type: String
+  InstanceType:
+    AllowedValues:
+      - t2.micro
+      - m3.medium
+      - m3.large
+      - m3.xlarge
+      - m3.2xlarge
+      - m4.large
+      - m4.xlarge
+      - m4.2xlarge
+      - m4.4xlarge
+      - m4.16xlarge      
+      - c3.large
+      - c3.xlarge
+      - c3.2xlarge
+      - c4.large
+      - c4.xlarge
+      - c4.2xlarge
+      - c5.large
+      - c5.xlarge
+      - c5.2xlarge
+    ConstraintDescription: must be a valid EC2 instance type.
+    Default: m4.4xlarge
+    Description: EC2 instance type
+    Type: String
+  InstanceCount:
+    Description: Number of Amazon EC2 instances to Launch. (Must be a number between
+      1 and 16).
+    Type: Number
+    Default: 1
+    ConstraintDescription: Must be a number between 1 and 16.
+    MinValue: 1
+    MaxValue: 16
+  InstanceMaxCount:
+    Description: Maximum Number of Amazon EC2 instances in an autoscaling group. (Must
+      be a number between 1 and 16)
+    Type: Number
+    Default: 4
+    ConstraintDescription: Must be a number between 1 and 16.
+    MinValue: 1
+    MaxValue: 16
+  InstanceMinCount:
+    Description: Minimum Number of Amazon EC2 instances in an autoscaling group. (Must
+      be a number between 1 and 16).
+    Type: Number
+    Default: 1
+    ConstraintDescription: Must be a number between 1 and 16.
+    MinValue: 1
+    MaxValue: 16
+  SSHLocation:
+    Description: The IP address range that can be used to connect using SSH or RDP
+      to the Amazon EC2 instances.
+    Type: String
+    Default: 0.0.0.0/0
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: Must be a valid IP CIDR range of the form x.x.x.x/x.
+  OperatingSystem:
+    AllowedValues:
+      - Ubuntu16x04
+    Default: Ubuntu16x04
+    Description: Operating System Type
+    Type: String
+  UseSpotInstances:
+    Description: Enable/Disable Spot Instances to lower pricing. Warning t2.micro Instance Type does not work with spot instances. Frankfurt, Singapore, Sydney and Tokio regions currently does not support spot instances.
+    AllowedValues:
+      - Enable
+      - Disable
+    Default: Enable
+    Type: String
+  SpotPricing:
+    Description: Price to bid on Spot Instances.
+    Type: Number
+    Default: 0.5
+    ConstraintDescription: Must be a Positive Number between 0 and 5
+    MinValue: 0
+    MaxValue: 5
+  KeyPairName:
+    ConstraintDescription: can contain only ASCII characters.
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: xavierkey
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: 'Miner Configuration:'
+        Parameters:
+          - UseDNS
+          - DomainName
+      - Label:
+          default: 'VM Configuration:'
+        Parameters:
+          - UseSpotInstances
+          - SpotPricing
+          - InstanceType
+          - OperatingSystem
+          - InstanceCount
+          - InstanceMaxCount
+          - InstanceMinCount
+      - Label:
+          default: 'Security:'
+        Parameters:
+          - KeyPairName
+          - SSHLocation
+    ParameterLabels:
+      KeyPairName:
+        default: Key Pair Name
+      UseSpotInstances:
+        default: Use Spot Instances
+      SpotPricing:
+        default: Spot Instance Bid Price
+Conditions:
+  cMinInstancesGreaterThanOne: !Not [!Equals [!Ref InstanceMinCount, 1]]
+  cSpotPriceGreaterThanZero: !Not [!Equals [!Ref SpotPricing, 0]]
+  cEnableSpotInstances: !And
+    - !Equals [!Ref UseSpotInstances, 'Enable']
+    - !Condition cSpotPriceGreaterThanZero
+    - !Not [!Equals [!Sub '${AWS::Region}', 'eu-central-1']]
+    - !Not [!Equals [!Sub '${AWS::Region}', 'ap-southeast-1']]
+    - !Not [!Equals [!Sub '${AWS::Region}', 'ap-southeast-2']]
+    - !Not [!Equals [!Sub '${AWS::Region}', 'ap-northeast-1']]
+    - !Not [!Equals [!Ref InstanceType, 't2.micro']]
+  cEnableGPUMining: !Not [!Equals [!Ref GPUMining, 'Enable']]
+
+# Resources documentation
+# http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-template-resource-type-ref.html
+Resources:
+
+  ####################################################################################
+  # Start of networking
+  ####################################################################################
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      InstanceTenancy: 'default'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-VPC'
+  publicSubnet01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: 'True'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PublicSubnet01'
+  publicSubnet02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: 'True'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-PublicSubnet02'          
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: [VPC]
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-InternetGateway'
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  InternetPublicRoutingTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: AttachInternetGateway
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-InternetRoutingTable'
+  InternetPublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InternetPublicRoutingTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnet01RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref publicSubnet01
+      RouteTableId: !Ref InternetPublicRoutingTable
+  PublicSubnet02RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref publicSubnet02
+      RouteTableId: !Ref InternetPublicRoutingTable      
+  AppSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: SSH
+        VpcId: !Ref VPC
+        SecurityGroupIngress:
+          - CidrIp: !Ref 'SSHLocation'
+            IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+        Tags:
+          - Key: Name
+            Value: !Sub '${AWS::StackName}-app-security-group'
+  ####################################################################################
+  # End of networking
+  ####################################################################################
+
+
+
+  #####################################################################################
+  # Start of EC2 Auto Scaling
+  #####################################################################################
+  EC2InstanceRole:
+    Type: AWS::IAM::Role 
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-EC2-InstanceRole'
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ec2.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:*
+                  - s3:Get*                  
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:ListMetrics
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${AWS::StackName}*:*'
+      Path: /
+  EC2InstanceRoleInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref EC2InstanceRole]
+  EC2AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref publicSubnet01
+        - !Ref publicSubnet02
+      LaunchConfigurationName: !Ref EC2LaunchConfig
+      MinSize: !Ref 'InstanceMinCount'
+      MaxSize: !Ref 'InstanceMaxCount'
+      DesiredCapacity: !Ref 'InstanceCount'
+      MetricsCollection:
+        # No metrics specified, send all!
+        # http://docs.aws.amazon.com/AutoScaling/latest/APIReference/API_EnableMetricsCollection.html
+        - Granularity: 1Minute
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-EC2'
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy: !If
+      - cMinInstancesGreaterThanOne
+      - AutoScalingRollingUpdate:
+          MinInstancesInService: '1'
+          MaxBatchSize: '1'
+          PauseTime: PT15M
+          WaitOnResourceSignals: 'true'
+      - AutoScalingReplacingUpdate:
+          WillReplace: true
+  EC2LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            apt:
+              unzip: []
+            python:
+              awscli: []
+          files:
+            /tmp/awslogs/awslogs-agent-setup.py:
+              source: https://s3.amazonaws.com/aws-cloudwatch/downloads/latest/awslogs-agent-setup.py
+            /var/awslogs/local/etc/awslogs.conf:
+              content: !Sub |
+                    [general]
+                    state_file= /var/awslogs/agent-state
+                    [outputlog]
+                    file = /tmp/output.log
+                    log_group_name =  ${LogGroupMinerLog}
+                    log_stream_name = outputlog-{instance_id}
+                    datetime_format = %d/%b/%Y:%H:%M:%S
+                    [cloud-init-outputlog]
+                    file = /var/log/cloud-init-output.log
+                    log_group_name =  ${LogGroupCloudInit}
+                    log_stream_name = cloudinit.outputlog-{instance_id}
+                    datetime_format = %d/%b/%Y:%H:%M:%S
+                    [system-log]
+                    file = /var/log/syslog
+                    log_group_name =  ${LogGroupSysLog}
+                    log_stream_name = syslog-{instance_id}
+                    datetime_format = %b %d %H:%M:%S
+              mode: '0006444'
+              owner: root
+              group: root
+          commands:
+            aws-set-region:
+              command: !Sub aws configure set region ${AWS::Region}
+              test: !Sub '! cat /root/.aws/config | grep ${AWS::Region}'
+            cwlogs-agent-install:
+              command: !Sub python /tmp/awslogs/awslogs-agent-setup.py -n -r ${AWS::Region} -c /var/awslogs/local/etc/awslogs.conf
+              test: '! systemctl | grep awslogs.service'
+          services:
+            sysvinit:
+              awslogs:
+                enabled: true
+                ensureRunning: true
+                files:
+                  - /var/awslogs/local/etc/awslogs.conf
+    Properties:
+      ImageId: !FindInMap [AWSRegion2AMI, !Ref 'AWS::Region', !Ref OperatingSystem]
+      SpotPrice: !If [cEnableSpotInstances, !Ref 'SpotPricing', !Ref 'AWS::NoValue']
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SecurityGroups: [!Ref AppSecurityGroup]
+      IamInstanceProfile: !Ref EC2InstanceRoleInstanceProfile
+      InstanceMonitoring: true
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash -ex
+
+          # # We can "trap" errors and use cfn-signal to "stop" the deploy
+          # function error_exit
+          # {
+          #   cfn-signal -e 1 --stack ${AWS::StackName} --resource EC2AutoScalingGroup --region ${AWS::Region}
+          #   exit 1
+          # }
+
+          # trap 'error_exit' ERR
+
+          # Update repo and get tool dependencies
+          apt-get update
+          apt-get install -y python-pip
+
+          # Install CloudFormation tools....
+          pip install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+
+          # Call CFN-INIT to process the metadata for CloudFormation Init. Since ubuntu does not have the tools installed, we install the CFN Bootstrap in the previous step.\n,
+          cfn-init -v --stack ${AWS::StackName} --resource EC2LaunchConfig --region ${AWS::Region}
+
+          # Install Minergate CLI
+          curl -O https://s3.amazonaws.com/digitalresonance.net/minergate-cli-release.deb
+          sudo dpkg -i minergate-cli-release.deb
+          nohup minergate-cli -user ${Email} -${Coin} 1>/tmp/input.log 2>/tmp/output.log &
+
+          # All is well, so signal AutoScalingGroup.
+          cfn-signal -e 0 --stack ${AWS::StackName} --resource EC2AutoScalingGroup --region ${AWS::Region}
+
+
+
+  #####################################################################################
+  # End of EC2 Auto Scaling
+  #####################################################################################
+
+
+
+  #####################################################################################
+  # Start of Log Groups
+  #####################################################################################
+  LogGroupMinerLog:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub '${AWS::StackName}-minerlog'
+      RetentionInDays: 7
+  LogGroupCloudInit:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub '${AWS::StackName}-cloudinitoutput'
+      RetentionInDays: 7
+  LogGroupSysLog:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain    
+    Properties:
+      LogGroupName: !Sub '${AWS::StackName}-syslog'
+      RetentionInDays: 7
+  
